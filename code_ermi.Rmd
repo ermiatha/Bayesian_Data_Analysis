@@ -1,0 +1,436 @@
+---
+title: "BDA-assignment"
+author: "Ermioni Athanasiadi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+To clarify:
+- Model 1: Base model only random intercepts or time effect too?
+- Rescale Time for better interpretation of model estimators
+- Lasso/Ridge regression: How close is "close to 0"?
+- Lasso/Ridge: necessary to standardize all covariates (so that they are comparable?)
+- what is the default threshold for lasso/ridge and do we need to change it?
+
+To Do:
+- send overleaf link 
+- send github repo link
+- finalize Q3 + 4 from (preliminary) models selected from Q2 
+- write this into report
+- start Code for Part II - Metropolis
+ 
+- Check missing data pattern
+- email prof Faes
+- check how to obtain residual variance (ICC analogue for Bayesian GLMM)
+- check loo::waic() function with coda.samples(model_run)
+
+
+Issues to be resolved:
+- clarify pow() and order of random effect parameter estimation
+- add model with stronger priors
+- convert par estimates to probabilities in model formula or after estimation?
+
+
+Notes on Model 1:
+- interpretation of the intercept in an only-intercept model (odds vs. odds ratio)
+
+
+```{r}
+library("R2OpenBUGS")
+library("coda")
+library("readr")
+library(rjags)
+library(R2jags)
+library(tidyverse)
+library(bayesplot)
+library(loo)
+```
+
+
+
+```{r}
+df <- readRDS("GSPS.RData")
+
+head(df)
+glimpse(df)
+summary(df)
+
+df <- df %>%
+  mutate(
+    year_scaled = year-1984,
+    id = as.numeric(as.factor(id)),  # because jags accepts only sequential integers
+    year_fct = as.factor(year),
+    working_fct = as.factor(working)
+  )
+
+X <- model.matrix(~ year, data = df)
+
+
+```
+
+# ***Question 1: Build & Fit Model***
+
+We want to investigate employment status over time. Our first model takes the form
+
+working ~ year + (1 | id)
+
+only accounting for repeated measurements over time per individual.
+
+Interestingly, our time variable 'year' contains subsequent years from 1984-1988, and then two "jumps", 1991, 1994. This makes treating the year variable as continuous a bit tricky.
+
+
+
+
+#### Specify model in BUGS language for logistic mixed model
+```{r}
+jags_str <- "
+model
+{
+  # Likelihood Level 1
+  for (i in 1:Nobs) {
+    logit(p[i]) <- beta[1] + beta[2] * year[i] + b0[id[i]]
+    # start with simpler model?
+    # logit(p[i] <- beta[1] + b0[id[i]])
+    working[i] ~ dbern(p[i])
+
+  }
+ 
+  # Likelihood Level 2
+  for(j in 1:Nsubj) {	
+			b0[j] ~ dnorm(0,taub0)
+  }
+  
+  # Priors
+  sigmab0 ~ dunif(0,100)
+	sigma2b0  <- pow(sigmab0,2)
+	taub0 <- pow(sigma2b0,-1)
+
+	
+	for (k in 1:2){
+		beta[k]  ~ dnorm(0.0,1.0E-2)  # weakly informative prior
+	}
+
+  # Parameters of interest
+  # pi_year0 <- exp(alpha_0)/(1+exp(alpha_0))
+  # pi_yearmean <- exp(alpha_0 + alpha_1)/(1+exp(alpha_0 + alpha_1))
+
+}
+"
+```
+
+
+#### ADD: Repeat with stronger Prior
+```{r}
+
+```
+
+
+#### Prepare the infrastructure for model estimation 
+```{r}
+# Prepare the data
+model_data <- list(
+  Nobs     = nrow(df),
+  Nsubj    = df %>% select(id) %>% unique() %>% nrow(),
+  #x1      = X[,2]
+  working  = df$working,
+  year     = df$year,
+  id       = df$id
+)
+
+# parameters to watch
+model_parameters <- c(
+  "beta", "sigmab0"
+)
+
+
+## can also be deleted --> if no convergence issues, then we can skip providing initial values
+my.inits <- list(
+  list(beta=c(0,0) , sigmab0=1),
+  list(beta=c(0,0) , sigmab0=10),
+  list(beta=c(0,0) , sigmab0=5)
+)
+
+
+```
+
+
+#### Model estimation with rjags 
+```{r}
+# run the model
+model_run <- jags(
+  data = model_data,
+  parameters.to.save = model_parameters,
+  model.file = textConnection(jags_str),
+  inits = my.inits,
+  n.chains = 3,
+  n.iter = 40000,
+  n.burnin = 1000,
+  n.thin = 2,
+  jags.seed = 1010 # ADD SEED! for reproducibility
+)
+
+
+```
+
+Likelihood:
+We use a Bernoulli-distribution for predicting the binary response variable (working status).
+
+Priors:
+- normal weakly informative priors for the fixed effects coefficients (intercept, time effect) with beta_i ~ N(0,0.1)
+- uniform prior for the variance of the random intercept
+
+#### Diagnostics and convergence checks
+```{r}
+model_run$BUGSoutput$summary[c(1, 2, 3), ]
+
+mcmc_samples <- as.mcmc(model_run)
+bayesplot::mcmc_trace(mcmc_samples)
+```
+
+
+```{r}
+
+mcmc.list <- as.mcmc.list(mcmc)
+mcmc.as.data.frame <- function(mcmc){
+    df = as.data.frame(as.matrix(mcmc))
+    df$chain <- rep(1:nchain(mcmc), each = nrow(mcmc[[1]]))
+
+    return (df)
+}
+
+mcmc.df <- mcmc.as.data.frame(mcmc_samples)
+```
+
+#### Obtain Inference summaries
+-> Post-Process data with posterior draws and summary table
+```{r}
+beta_parameters <- c("beta[1]", "beta[2]")
+beta_plot_df <- mcmc.df %>% 
+    select(all_of(beta_parameters), "chain") %>%
+    pivot_longer(
+        cols = all_of(beta_parameters),
+        names_to = "parameter",
+        values_to = "value"
+    )
+
+beta_par_summary <- beta_plot_df %>%
+    group_by(parameter) %>%
+    summarize(
+      mean = mean(value),
+      median = median(value),
+      # mode = ?,
+      sd = sd(value)
+    )
+
+beta_hpddf <- HPDinterval(
+  as.mcmc(
+    do.call(
+      rbind, mcmc[,beta_parameters]
+    )
+  )
+) %>% as.data.frame()
+beta_hpddf$parameter <- rownames(beta_hpddf)
+rownames(beta_hpddf) <- NULL
+
+
+beta_summary <- merge(
+  beta_par_summary, beta_hpddf,
+  by = 'parameter'
+  )
+
+rownames(beta_summary) <- beta_summary$parameter
+rownames(beta_summary) <- c("$\\beta_0$", "$\\beta_1$")
+beta_summary$parameter <- NULL
+colnames(beta_summary) <- c('Mean', 'Median', 'SD', 'LL', 'UL')
+
+beta_summary <- beta_summary %>% round(3)
+
+beta_summary
+```
+
+
+Now obtain inference summary for random intercept:
+```{r}
+#########
+
+
+
+#########
+```
+
+#### Add comparisons: Diff between Mean and Posterior Mean
+```{r}
+
+```
+
+
+#### Interpretation
+Large intercept, very small (negligible) time effect, no significant effect based in HPD interval. 
+
+We cannot infer that time affects working status based on this model.
+
+
+Random intercept Variance (Recheck):
+~ 4, indicating that a lot of variation is captured 
+
+
+
+## Redo analysis but store log likelihood
+```{r}
+jags_str <- "
+model
+{
+  # Likelihood Level 1
+  for (i in 1:Nobs) {
+    logit(p[i]) <- beta[1] + beta[2] * year[i] + b0[id[i]]
+    working[i] ~ dbern(p[i])
+    
+    # store the pointwise log-likelihood (for WAIC)
+    loglik[i] <- logdensity.bern(working[i], p[i])
+  }
+ 
+  # Likelihood Level 2
+  for(j in 1:Nsubj) {	
+			b0[j] ~ dnorm(0,taub0)
+  }
+  
+  # Priors
+  # beta[1] ~ dnorm(0.0,0.01)
+  # beta[2] ~ dnorm(0.0,0.01)
+  
+  sigmab0 ~ dunif(0,100)
+	sigma2b0  <- pow(sigmab0,2)
+	taub0 <- pow(sigma2b0,-1)
+
+	
+	for (k in 1:2){
+		beta[k]  ~ dnorm(0.0,1.0E-2)
+	}
+
+  # Parameters of interest
+  # pi_year0 <- exp(alpha_0)/(1+exp(alpha_0))
+  # pi_yearmean <- exp(alpha_0 + alpha_1)/(1+exp(alpha_0 + alpha_1))
+
+}
+"
+```
+
+```{r}
+# add loglik to parameters to watch
+model_parameters <- c(
+  "beta", "sigmab0", "loglik"
+)
+```
+
+
+# ***Question 2: Model 2-3***
+
+*Ridge Priors*
+= independent Gaussian priors with common variance
+
+*Lasso Priors*
+Laplace (double exponential) priors
+
+Both can be applied for variable selection
+
+
+
+Conventional Lasso/Ridge Regression:
+Penalty is at the absolute vs. at squared value and can become 0
+Bayesian Variant:
+If you add a prior, the coefficient will never become exactly Zero, but very close to Zero
+
+
+
+
+#### Idea: try out if coefficient estimates change much if stronger priors are applied
+--> sort of Sensitivity analysis
+```{r}
+
+```
+
+
+
+
+#### implement Ridge priors
+```{r}
+
+```
+
+#### implement Lasso priors
+```{r}
+
+```
+
+
+
+# ***Question 3: Model comparison***
+#### compute WAIC and DIC
+
+https://kevintshoemaker.github.io/NRES-746/LECTURE8.html 
+
+*WAIC: Wattanabe-Akaike information criterion*
+
+Is interpretable just like AIC, BIC and DIC and allows us to compare models fitted in a Bayesian framework via MCMC:
+
+WAIC=−2(lppd−P_WAIC)
+$$
+WAIC = -2(lppd - P_{WAIC})
+$$
+
+$$
+lppd = \sum_i log \int_\theta
+P(y_i|\theta)P(\theta | y)d\theta
+$$
+
+$$
+P_{WAIC} = \sum_i
+Var[log(P(y_i|\theta_{post})]
+$$
+
+- integral is approximated by averaging across the posterior distribution of the likelihood of each data point --> need to compute likelihood of each data point in our MCMC model fitting algorithm
+- $P_WAIC$ is a penalty term (= effective number of parameters). 
+- Less complex models are more constrained (less flexible/variable in the likelihood of each data point across MCMC samples) --> less penalty, complex models --> greater penalty.
+
+```{r}
+# equaliza variable naming *************
+#mcmc_samples <- as.mcmc(model_run)
+
+loglik_names <- sprintf("loglik[%d]", 1:model_data$Nobs)
+
+lls <- as.matrix(mcmc_samples)[, loglik_names]
+
+waic_full <- waic(lls)
+waic_full$estimates["waic",]
+
+
+```
+
+
+*DIC: Deviance Information criterion*
+```{r}
+model_run$BUGSoutput$DIC
+
+```
+
+```{r eval=FALSE, include=FALSE}
+
+## doesnt work
+dic.samples(model_run)
+
+```
+
+
+# ***Question 4: Model evaluation***
+#### generate predicted y_is from posterior draws
+```{r}
+
+```
+
+
+
+
