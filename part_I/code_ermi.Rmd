@@ -48,6 +48,9 @@ library(loo)
 library(GWalkR)
 ```
 
+```{r}
+getwd()
+```
 
 
 ```{r}
@@ -521,6 +524,7 @@ niter(mcmc_samples_all[[1]])
 Ok. Due to thinning and burn-in period, we end up with way less rows than the initially specified 40.000 iterations. 
 
 *DIC: Deviance Information criterion*
+#### compute DIC
 ```{r}
 model_run$BUGSoutput$DIC
 
@@ -670,6 +674,9 @@ compare this to the observed values
 ```{r}
 mean(df$working)
 ```
+
+
+
 ```{r}
 y_obs <- mean(df$working)
 
@@ -680,7 +687,9 @@ ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
   geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
   geom_vline(xintercept = mean(y_obs), col = "red", lwd = 0.8) +
   labs(x = "Mean employment", y = "Frequency",
-       title = "Posterior predictive distribution of predicted working probability")
+       title = "Posterior predictive distribution of predicted probability for working status")
 
+
+ggsave("./export/figures/")
 ```
 
