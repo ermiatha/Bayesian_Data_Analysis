@@ -17,14 +17,11 @@ To clarify:
 - what is the default threshold for lasso/ridge and do we need to change it?
 
 To Do:
-- send overleaf link 
-- send github repo link
 - finalize Q3 + 4 from (preliminary) models selected from Q2 
 - write this into report
 - start Code for Part II - Metropolis
  
 - Check missing data pattern
-- email prof Faes
 - check how to obtain residual variance (ICC analogue for Bayesian GLMM)
 - check loo::waic() function with coda.samples(model_run)
 
@@ -48,12 +45,13 @@ library(R2jags)
 library(tidyverse)
 library(bayesplot)
 library(loo)
+library(GWalkR)
 ```
 
 
 
 ```{r}
-df <- readRDS("GSPS.RData")
+df <- readRDS("data/GSPS.RData")
 
 head(df)
 glimpse(df)
@@ -64,13 +62,37 @@ df <- df %>%
     year_scaled = year-1984,
     id = as.numeric(as.factor(id)),  # because jags accepts only sequential integers
     year_fct = as.factor(year),
-    working_fct = as.factor(working)
+    working_fct = as.factor(working),
+    female_fct = as.factor(female)
   )
 
 X <- model.matrix(~ year, data = df)
 
 
 ```
+
+# EDA
+```{r}
+gwalkr(df)
+```
+
+
+Which of the variables are baseline measures / time-constant?
+
+- educ (years of schooling)
+- 
+```{r}
+
+```
+
+
+```{r}
+df %>%
+  summarise(
+    
+  )
+```
+
 
 # ***Question 1: Build & Fit Model***
 
