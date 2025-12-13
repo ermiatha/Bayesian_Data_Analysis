@@ -683,13 +683,14 @@ y_obs <- mean(df$working)
 # Summarize posterior predictive outcomes
 y_rep_means <- colMeans(y_rep)  # mean of each simulated dataset
 
-ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
+fig_post_pred_distr <- ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
   geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
   geom_vline(xintercept = mean(y_obs), col = "red", lwd = 0.8) +
-  labs(x = "Mean employment", y = "Frequency",
-       title = "Posterior predictive distribution of predicted probability for working status")
+  labs(x = "Mean probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
 
 
-ggsave("./export/figures/")
+ggsave("./export/figures/q4_post_pred_distr.png", fig_post_pred_distr, heigh = 4, width = 4)
 ```
 
