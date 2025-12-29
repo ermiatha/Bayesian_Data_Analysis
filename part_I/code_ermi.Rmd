@@ -24,6 +24,16 @@ To Do:
 - Check missing data pattern
 - check how to obtain residual variance (ICC analogue for Bayesian GLMM)
 - check loo::waic() function with coda.samples(model_run)
+- check how we can transform the SEs that are in the logit model output from log-odds to probabilities
+
+PART II
+- Q1/Q2
+- once u have summary of parameter, its "too late" to transform to other scale (e.g. log), u need to go back to samples and get log and then again summarize
+-> e.g. for OR take ratio of all pairs and then summarize again from samples -> CHECK THIS
+
+To Add to Report:
+- HPD interval (Q1)
+
 
 
 Issues to be resolved:
