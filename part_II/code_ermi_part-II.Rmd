@@ -10,323 +10,432 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
 
-# OLD CODE FROM OPTIMIZATION ASSIGNMENT
+```
 
-##### Task 1 ######################################
 
-## Newwton-Rhapson
+# Q4: Newton-Raphson-Algorithm
+```{r}
 
-maxit <- 50
-th <- matrix(0,maxit,3)
-th[1,1:2] <- c(0.2, 0.5)
+newton_raphson <- function(n, 
+                           y, 
+                           t, 
+                           alpha, 
+                           gamma, 
+                           delta, 
+                           maxit, 
+                           lambda_start, 
+                           beta_start) {
 
-theta1 <- 0.5
-theta2 <- 0.5
-ll <-  1048*log(3*theta1 + theta2) + 8125*log(4-2*theta1 -theta2) + 
-  131*log(theta1) + 696*log(theta2)
-th[1,3] <- ll
-th
-
-for (i in 2:maxit) {
-  # theta vector
-  theta1 <- th[i-1,1]
-  theta2 <- th[i-1,2]
+  #####
+  # this function is based on the gradient from Antoninas solution
+  #####
   
-  theta1 <- max(0.00001, theta1)  # Ensure theta1 > 0
-  theta2 <- max(0.00001, theta2)  # Ensure theta2 > 0
-  if (4 - 2 * theta1 - theta2 <= 0) {
-    theta2 <- 4 - 2 * theta1   # Small epsilon to avoid boundary issues
+  # starting values for parameters
+  # NOTE: REPARAMETRIZED PARS ARE USED and denote lambda_tilde, beta_tilde
+  lambda <- lambda_start
+  beta <- beta_start
+  # overall parameter vector theta (9x1 vector)
+  theta <- c(lambda, beta)
+  
+  # initialize result matrix with 3 columns and nrow=maxit
+  res <- matrix(0, maxit, 10)
+  res[1, 1:8] <- lambda
+  res[1, 9] <- beta
+  
+  for (i in 2:maxit) {
+    
+  
+    # use estimates from previous step
+    lambda <- res[i-1, 1:8]
+    beta <- res[i-1, 9]
+    
+    # log posterior
+    log_p <- sum((y + alpha)*lambda) - sum((t + exp(beta))*exp(lambda)) + (n*alpha + gamma)*beta - delta*exp(beta)
+    res[1,10] <- log_p
+    
+    # gradient of log-posterior (vector of first derivatives)
+    # lambda gradient vector of n=8
+    grad_lambda <- (y +  alpha) - exp(lambda)*(t + exp(beta))
+    # beta gradient of n=1
+    grad_beta <- n*alpha + gamma - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
+  
+    # build gradient vector
+    grad <- c(grad_lambda, grad_beta)
+    
+    
+    # 2nd order derivative of lambdas n=8
+    g2_lambda <- -exp(lambda)*(t+exp(beta))
+    g2_beta <- -exp(beta)*sum(exp(lambda))-delta*exp(beta)
+    
+    # cross derivatives
+    cross_der <- -exp(lambda)*exp(beta)
+    
+    # build hessian of 9x9 dimensions
+    hess <- matrix(0, 9, 9)
+    diag(hess) <- c(g2_lambda, g2_beta)
+    hess[1:8, 9] <- -exp(beta) * exp(lambda)
+    hess[9, 1:8] <- -exp(beta) * exp(lambda)
+    
+      
+    # N-R step
+    theta <- c(lambda, beta)
+    theta_new <- theta - solve(hess, grad) # res[i, 1:9] <- th[i-1,1:9]-1*solve(hess)%*%grad
+    
+    ## update parameters
+    lambda <- theta_new[1:8]
+    beta <- theta_new[9]
+    
+    # store new estimated pars
+    res[i, ] <- c(lambda, beta, log_p)
+
+    
+    ## ensure that lambdas are > 0 ?
+    # lambda[1] <- max(0.00001, lambda[1])
+    # ...
+    
+    ## ensure that beta > 0 ?
+    
   }
-
-  # score vector
-  s1 <- 3144/(3*theta1 + theta2) - 16250/(4-2*theta1 - theta2) + 131/theta1
-  s2 <- 1048/(3*theta1 + theta2) - 8125/(4-2*theta1 - theta2) + 696/theta2
-  score <- c(s1, s2)
   
-  # hessian matrix
-  s1_th1 <- -(3144*3)/((3*theta1+theta2)^2) + (16250*(-2))/((4-2*theta1-theta2)^2) - 131/(theta1^2)
-  s1_th2 <- -3144/((3*theta1 + theta2)^2) - 16250/((4-2*theta1 - theta2)^2)
-  s2_th2 <- -1048/((3*theta1+theta2)^2) - 8125/((4-2*theta1-theta2)^2) - 696/(theta2^2)
-  s2_th1 <- -(1048*3)/((3*theta1+theta2)^2) + (8125*(-2))/((4-2*theta1-theta2)^2)
-  hess <- matrix(c(s1_th1, s1_th2, s2_th1, s2_th2), 2, byrow = T)
-
-  # store log-likelihood
-  ll <-  1048*log(3*theta1 + theta2) + 8125*log(4-2*theta1 -theta2) + 
-    131*log(theta1) + 696*log(theta2)
-  th[i,3] <- ll
+  res
   
-  # update thetas
-  th[i, 1:2] <- th[i-1,1:2]-1*solve(hess)%*%score
 }
 
-## EM-Algorithm
+
+
+```
+
+```{r}
+newton_raphson_old <- function(n, 
+                           y, 
+                           t, 
+                           alpha, 
+                           gamma, 
+                           delta, 
+                           maxit, 
+                           lambda_start, 
+                           beta_start) {
+
+  #####
+  # this function is based on the gradient from my old solution
+  #####
+  
+  # starting values for parameters
+  # NOTE: REPARAMETRIZED PARS ARE USED and denote lambda_tilde, beta_tilde
+  lambda <- lambda_start
+  beta <- beta_start
+  # overall parameter vector theta (9x1 vector)
+  theta <- c(lambda, beta)
+  
+  # initialize result matrix with 3 columns and nrow=maxit
+  res <- matrix(0, maxit, 10)
+  res[1, 1:8] <- lambda
+  res[1, 9] <- beta
+  
+  for (i in 2:maxit) {
+    
+  
+    # use estimates from previous step
+    lambda <- res[i-1, 1:8]
+    beta <- res[i-1, 9]
+    
+    # log posterior
+    # first version: has algebraic mistakes
+    # log_p <- sum(y*lambda*t - t*exp(lambda)) + beta*(n*alpha + gamma-1) + sum((alpha - 1)*lambda) -      exp(beta)*sum(exp(lambda)) - delta*exp(beta)
+    # second version: 
+    log_p <- sum(y*lambda - t*exp(lambda)) + sum((alpha - 1)*lambda) - exp(beta)*sum(exp(lambda)) + beta*(n*alpha + gamma) - delta*exp(beta)
+    # third version: Antoninas solution
+    # log_p <- sum((y + alpha)*lambda) - sum((t + exp(beta))*exp(lambda)) + (n*alpha + gamma)*beta - delta*exp(beta)
+    res[1,10] <- log_p
+    
+    # gradient of log-posterior (vector of first derivatives)
+    # lambda gradient vector of n=8
+    # first version: grad_lambda <- (y*t +  alpha-1) - exp(lambda)*(t + exp(beta))
+    grad_lambda <- (y +  alpha-1) - exp(lambda)*(t + exp(beta))
+    # Antoninas solution: 
+    # grad_lambda <- (y +  alpha) - exp(lambda)*(t + exp(beta))
+    # beta gradient of n=1
+    grad_beta <- n*alpha + gamma - 1 - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
+    # Antoninas solution: 
+    # grad_beta <- n*alpha + gamma - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
+  
+    # build gradient vector
+    grad <- c(grad_lambda, grad_beta)
+    
+    
+    # 2nd order derivative of lambdas n=8
+    g2_lambda <- -exp(lambda)*(t+exp(beta))
+    g2_beta <- -exp(beta)*sum(exp(lambda))-delta*exp(beta)
+    
+    # cross derivatives
+    cross_der <- -exp(lambda)*exp(beta)
+    
+    # build hessian of 9x9 dimensions
+    hess <- matrix(0, 9, 9)
+    diag(hess) <- c(g2_lambda, g2_beta)
+    hess[1:8, 9] <- -exp(beta) * exp(lambda)
+    hess[9, 1:8] <- -exp(beta) * exp(lambda)
+    
+      
+    # N-R step
+    theta <- c(lambda, beta)
+    theta_new <- theta - solve(hess, grad) # res[i, 1:9] <- th[i-1,1:9]-1*solve(hess)%*%grad
+    
+    ## update parameters
+    lambda <- theta_new[1:8]
+    beta <- theta_new[9]
+    
+    # store new estimated pars
+    res[i, ] <- c(lambda, beta, log_p)
+
+    
+    ## ensure that lambdas are > 0 ?
+    # lambda[1] <- max(0.00001, lambda[1])
+    # ...
+    
+    ## ensure that beta > 0 ?
+    
+  }
+  
+  res
+  
+}
+
+```
+
+
+```{r}
+
+n <- 8
+y <- c(4, 1, 5, 14, 3, 19, 7, 6)
+t <- c(95, 16, 63, 126, 6, 32, 16, 19)
+
+alpha <- 1.8
+gamma <- 0.01
+delta <- 1
+
+maxit <- 80
+
+lambda_start <- rep(0, 8)
+beta_start <- 0
+
+
+res <- newton_raphson(n, y, t, alpha, gamma, delta, maxit, 
+                      lambda_start, beta_start)
+
+```
+
+
+```{r}
+head(res)
+summary(res)
+```
+
+
+The resulting $\theta$ vector is of the form
+```{r}
+round(colMeans(res[, 1:9]), 5)
+```
+
+
+But needs to be backtransformed
+```{r}
+round(colMeans(exp(res[, 1:9])), 5)
+```
+
+Lets quickly compare with the results obtained based on the old solution (different gradient, same Hessian)
+```{r}
+
+res_old <- newton_raphson_old(n, y, t, alpha, gamma, delta, maxit, 
+                      lambda_start, beta_start)
+
+round(colMeans(exp(res_old[, 1:9])), 5)
+
+```
+Ok, we get fairly similar results. Lets stick with the newer version though.
+
+
+
+
+# Q5: Laplace-Approximation
+```{r}
+
+```
+
+
+# Q6: Metropolis Hastings
+```{r}
+set.seed(1995)
+#### random walk metropolis sampler ####
+
 
 # observed data
-Y <- c(1048, 8125, 131, 696)
+y <- c(4, 1, 5, 14, 3, 19, 7, 6)
+t <- c(95, 16, 63, 126, 6, 32, 16, 19)
 
-# set initial values for theta
-theta <- c(0.5, 0.5) # theta1, theta2
+alpha <- 1.8
+gamma <- 0.01
+delta <- 1
 
-# set tolerance and maximum of iterations
-tol <- 1e-8
-maxit <- 100
+# MCMC settings
+m <- 35000  # chain length
+acc <- 0
+burnin <- 5000
 
-# function for log-likelihood
-ll <- function(theta) {
-  # given a theta vector
-  theta1 <- theta[1]
-  theta2 <- theta[2]
-  # estimate objective function
-  curr_ll <- 1048 * log(3 * theta1 + theta2) + 8125 * log(4 - 2 * theta1 - theta2) +
-    131 * log(theta1) + 696 * log(theta2)
-  return(curr_ll)
+# function to estimate log posterior given the theta parameter
+get_log_posterior <- function(theta) {
+
+  lambda <- theta[1:8]   # log-lambdas
+  beta <- theta[9]       # log-beta
+
+  # old solution for log-posterior
+  #sum((y + alpha - 1) * lambda) -
+  #  sum(t * exp(lambda)) - exp(beta) * sum(exp(lambda)) + (length(y) * alpha + gamma - 1) * beta - delta * exp(beta)
+  log_p <- sum((y + alpha)*lambda) - sum((t + exp(beta))*exp(lambda)) + (n*alpha + gamma)*beta - delta*exp(beta)
+  log_p
 }
 
-prev_ll <- -Inf  # set negative threshold for beginning 
+# initialize results vector
+theta_results <- matrix(NA, m, 9)
 
-# set up result tables for parameter estimates and unobserved data estimates
-tab_theta <- matrix(0,maxit,3)
-tab_theta[1, 1:2] <- theta
-tab_Z <- matrix(0, maxit, 4)
-
-# em-algorithm: iterate through e and m step until convergence
-for (i in 2:maxit) {
-  # E-step: get expected values
-  Z11 <- (3 * theta[1]) / (3 * theta[1] + theta[2]) * Y[1]
-  Z12 <- theta[2] / (3 * theta[1] + theta[2]) * Y[1]
-  Z21 <- ((1/2) - (theta[1]/2)) / ((1/2) - (theta[1]/2) + (1/2) - (theta[2]/4)) * Y[2]
-  Z22 <- ((1/2) - (theta[2]/4)) / ((1/2) - (theta[1]/2) + (1/2) - (theta[2]/4)) * Y[2]
-  Z3 <- Y[3]
-  Z4 <- Y[4]
-  
-  # store expected values in result table
-  tab_Z[i, ] <- c(Z11, Z12, Z21, Z22)
-  
-  # M-step: 
-  # update theta-vector 
-  theta[1] <- (Z11 + Z3) / (Z11 + Z3 + Z21)
-  theta[2] <- (2*(Z12 + Z4)) / (Z22 + Z12 + Z4)
-  # estimate objective function
-  curr_ll <- ll(theta)
-  
-  # store parameter values
-  tab_theta[i, 1:2] <- theta
-  tab_theta[, 3] <- curr_ll
-    
-    # stop if convergence is reached
-    if (abs(curr_ll - prev_ll) < tol) {
-      tab_theta <- tab_theta[0:i, ]
-      tab_Z <- tab_Z[0:i, ]
-      break
-    }
-    # update previous log-lik-function
-    prev_ll <- curr_ll
-    
-}
+# starting values
+theta_current <- rep(0, 9)
+log_current <- get_log_posterior(theta_current)
+theta_results[1, ] <- theta_current
 
 
-##### Task 2 ######################################
+# tuning parameter for sd of proposal 
+proposal_sd <- 0.283   # you may tune later
 
-#### Importance sampling ####
-sim=2000
-nn=seq(5:sim)
-ll=length(nn)
+# MCMC loop
+for (i in 2:m) {
 
-n <- 10                
-k <- 4                  
-theta <- k/n
+  # random-walk proposal
+  theta_cand <- theta_current + rnorm(9, 0, proposal_sd)
 
-# prior distribution
-prior <- function(theta) {
-  prior_distr <- exp(-4*(theta-0.5)^2-2*(sin(12*pi*theta)^2))
-  return(prior_distr)
-}
-
-mciobs.is=rep(0, ll)
-
-set.seed(123123)
-for (i in 1:ll){
-  yobs <- rbinom(sim, size = n, prob = theta) # likelihood of data given theta
-  weights <- yobs * prior(theta) / dnorm(yobs, mean=4, sd=2)
-  mciobs.is[i] <- mean(weights[1:nn[i]])}
-  plot(nn,mciobs.is,type="l",ylim=c(-1,50)
-       ,xlab="Number of samples",ylab="Estimate")
-  abline(h=15,col="red",lty="dotted")
-  
-mean(weights)  # normalizing constant
-mean(mciobs.is)
-
-#### rejection algorithm ####
-
-par(mfrow = c(1, 1))
-# visualize the envelope M*g(x) and p(theta|y)
-png("plots/prior_comparison.png", width = 10, height = 8, units = "in", res = 300)
-xx <- seq(0, 1, .001)
-plot(xx, prior(xx), type = "l", ylim = c(0, 2), xlim = c(0, 1.2),
-     xlab = "x", ylab = "Density",
-     col = "black", lwd = 2, 
-     cex.lab = 1.5, cex.axis = 1.5, las = 1) 
-lines(xx, 0.4 + dbeta(xx, 1.8, 1.8), col = "purple", lwd = 2)
-lines(xx, dnorm(xx, 0.5, sd = 0.35), col = "green", lwd = 2)
-lines(xx, 1.01 * dunif(xx), col = "blue", lwd = 2)
-legend("topright", legend = c("Prior", 
-                              expression(0.4 + Beta(1.8, 1.8)), 
-                              expression(N(0.5, 0.35)), 
-                              "Uniform"),
-       col = c("black", "purple", "green", "blue"), lty = 1, lwd = 2, cex = 1.2, bty = "n")
-grid(col = "gray", lty = "dotted")
-dev.off()
-
-
-
-set.seed(3434)
-# set sample size and normalizing constant
-n = 10000
-M <- 1
-
-# sample from uniform distribution
-ss <- runif(n, 0, 1)
-
-# get f(x) for sample based on uniform distribution
-fss_unif <- dunif(ss, 0, 1)
-# try out with beta
-fss_beta <- 0.4+dbeta(ss, 1.8, 1.8)
-# try out with normal distribution
-fss_norm <- dnorm(ss, 0.5, sd=0.35)
-# sample based on prior
-fss_weirdo <- prior(ss)
-
-# check that M is large enough to build the envelope
-which(fss_weirdo > M*fss_unif) # should be 0
-which(fss_weirdo > M*fss_beta)
-which(fss_weirdo > M*fss_beta)
-which(fss_weirdo > M*fss_norm)
-
-# acceptance
-u <- runif(n, 0, 1)
-accept <- fss_weirdo / (M*fss_norm)
-select <- (u < accept)
-acceptance_prob <- sum(select)/n  # 0.418
-
-
-hist(ss[select], freq = F)
-
-## compare to theoretical value
-besselI(1, 0) / exp(1)
-# [1] 0.4657596
-
-x <- seq(0,1, .001)
-for (i in 1:n) {
-  posterior_prob <- (likelihood * prior_prob) / 1
-}
-
-plot(x, posterior(x))
-xx <- seq(0,1, .001)
-prior_prob <- prior(xx)
-likelihood <- dbinom(4, 10, xx)
-posterior_prob <- (likelihood * prior_prob) / M
-
-png("plots/posterior_prob.png", width = 10, height = 8, units = "in", res = 300)
-par(mar = c(7, 7, 1, 2))
-par(mgp = c(4, 1, 0))
-plot(x, posterior_prob, type = "l",
-     xlab = "x",
-     ylab = "Posterior Probability",
-     col = "dodgerblue",
-     lwd = 2, 
-     cex.axis = 1.5,
-     cex.lab = 1.5, 
-     las = 1) 
-grid(col = "gray", lty = "dotted") 
-dev.off()
-
-posterior <- function(theta) {
-  post <- (dbinom(4, 10, theta) * prior(theta)) / M
-  return(post)
-}
-
-#### Metropolis sampler ####
-
-## random number generator for uniform distribution
-rf <- function(n) {
-  y <-   runif(n)
-  return(y)
-}
-
-
-# prior distribution
-prior <- function(theta) {
-  prior_distr <- exp(-4*(theta-0.5)^2-2*(sin(12*pi*theta)^2))
-  return(prior_distr)
-}
-
-
-# function to evaluate proposed function at log scale to avoid small numbers
-log_posterior <- function(theta) {
-  log_post <- log(dbinom(4, 10, theta)) - log(prior(theta))
-  return(log_post)
-}
-
-# get a sample 
-sx <- rf(n)
-n <- 10000  # number of iterations
-acc <- 0 # set counter for acceptance
-
-theta_current <- 0.4
-log_current <- log_posterior(theta_current)
-
-theta_results <- rep(0, n) # result vector to store samples
-theta_results[1] <- theta_current  # set initial value for theta
-
-# for each iteration
-for (i in 2:n) {
-  # draw a candidate
-  theta_cand <- runif(1)
-  theta_cand <- rbeta(1, 1.8, 1.8)
-  # compare likelihood of candidate with current value
-  log_cand <- log_posterior(theta_cand)
+  log_cand <- get_log_posterior(theta_cand)
   logalpha <- log_cand - log_current
-  alpha <- exp(logalpha)
-  
-  # accept candidate if larger than some random uniform draw
-  u <- runif(1)
-  if (u < alpha) {
+
+  # accept/reject
+  if (log(runif(1)) < logalpha) {
     theta_current <- theta_cand
-    acc = acc + 1 # update acceptance counter
     log_current <- log_cand
+    acc <- acc + 1
   }
-  theta_results[i] <- theta_current
+
+  theta_results[i, ] <- theta_current
 }
 
-theta_results
-acceptance <- acc/n
 
+
+# acceptance rate --> should be 23%
+acceptance <- acc/m
+acceptance
+
+# then remove burn-in period
+theta_results <- theta_results[(burnin+1):m, ]
+
+
+```
+
+```{r}
 # line plot for theta samples
-png("plots/MH_line.png", width = 10, height = 8, units = "in", res = 300)
-par(mar = c(5, 5, 1, 2))
+#png("plots/MH_line.png", width = 10, height = 8, units = "in", res = 300)
+#par(mar = c(5, 5, 1, 2))
 plot(theta_results, type="l", 
      xlab="Iteration", ylab=expression(theta), 
-     ylim=c(0,1),
-     col="dodgerblue", lwd=2, 
+     ylim=c(-2,0.5),
+     col="lightblue", lwd=2, 
      cex.axis=1.5, cex.lab=1.5, 
      cex.main=2, las=1)  
 grid()  
-dev.off()
+#dev.off()
 
 
 ## histogram
-png("plots/MH_hist.png", width = 10, height = 8, units = "in", res = 300)
+#png("plots/MH_hist.png", width = 10, height = 8, units = "in", res = 300)
 par(mar = c(5, 5, 1, 2))
 hist(theta_results, 
      xlab=expression(theta), ylab="Density", 
      main="",
-     col="dodgerblue", border="lightblue", 
+     col="lightblue", border="grey", 
      breaks=70, 
-     ylim=c(0, 6),  
+     ylim=c(0, 1),  
      cex.axis=1.5, cex.lab=1.5, 
      cex.main=2, las=1, freq=FALSE)  
 grid()  
-dev.off()
+#dev.off()
+```
+
+```{r}
+set.seed(1995)
+
+burnin <- 5000
+
+# assume res is (M x 9): lambdas + beta
+samples <- as.data.frame(theta_results[, 1:9])
+colnames(samples) <- c(paste0("lambda", 1:8), "beta")
+
+samples$iter <- seq_len(nrow(samples))
+
+```
+
+```{r}
+lambda_long <- samples %>%
+  pivot_longer(cols = starts_with("lambda"),
+               names_to = "parameter",
+               values_to = "value")
+
+ggplot(lambda_long, aes(x = iter, y = value, colour = parameter)) +
+  geom_line(alpha = 0.8) +
+  labs(x = "Iteration", y = expression(lambda[i])) +
+  theme_minimal(base_size = 14)
+
+```
+The values of the lambda vector are too close. Lets plot them separately in the next step.
+
+```{r}
+ggplot(samples, aes(x = iter, y = beta)) +
+  geom_line(colour = "lightblue", linewidth = 0.8) +
+  labs(x = "Iteration", y = expression(beta)) +
+  theme_minimal(base_size = 14)
+```
+```{r}
+samples_long <- samples %>%
+  pivot_longer(cols = -iter,
+               names_to = "parameter",
+               values_to = "value")
+
+ggplot(samples_long, aes(x = iter, y = value)) +
+  geom_line(colour = "lightblue", linewidth = 0.6) +
+  facet_wrap(~ parameter, scales = "free_y", ncol = 3) +
+  labs(x = "Iteration", y = "") +
+  theme_minimal(base_size = 13)
+
+```
+Q7: Point estimate and credible interval
+```{r}
+
+```
+
+Q8: Predicted probability for p(lambda_4 > 0.11)
+```{r}
+
+```
+
+```{r}
+
+samples_summ <- 
+  samples %>%
+  summarize(
+    mean_
+  )
+
+# 0.56
+
 ```
 
