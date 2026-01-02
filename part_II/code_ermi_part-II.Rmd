@@ -13,9 +13,9 @@ knitr::opts_chunk$set(echo = TRUE)
 library(ggplot2)
 library(tidyr)
 library(dplyr)
-
+library(MASS)
+library(coda)
 ```
-
 
 # Q4: Newton-Raphson-Algorithm
 ```{r}
@@ -193,12 +193,9 @@ newton_raphson_old <- function(n,
     res[i, ] <- c(lambda, beta, log_p)
 
     
-    ## ensure that lambdas are > 0 ?
+    ## ensure that exponentiated lambdas are > 0 ?
     # lambda[1] <- max(0.00001, lambda[1])
     # ...
-    
-    ## ensure that beta > 0 ?
-    
   }
   
   res
@@ -239,6 +236,9 @@ summary(res)
 The resulting $\theta$ vector is of the form
 ```{r}
 round(colMeans(res[, 1:9]), 5)
+
+round(res[80, 1:9], 5)
+
 ```
 
 
@@ -264,7 +264,33 @@ Ok, we get fairly similar results. Lets stick with the newer version though.
 # Q5: Laplace-Approximation
 ```{r}
 
+theta <- res[80, 1:9]
+lambda <- theta[1:8]
+beta <- theta[9]
+
+# build gradient
+grad_lambda <- (y +  alpha) - exp(lambda)*(t + exp(beta))
+grad_beta <- n*alpha + gamma - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
+grad <- c(grad_lambda, grad_beta)
+  
+# build hessian of 9x9 dimensions
+hess <- matrix(0, 9, 9)
+# 2nd order derivative of lambdas n=8
+g2_lambda <- -exp(lambda)*(t+exp(beta))
+g2_beta <- -exp(beta)*sum(exp(lambda))-delta*exp(beta)
+# cross derivatives
+cross_der <- -exp(lambda)*exp(beta)
+diag(hess) <- c(g2_lambda, g2_beta)
+hess[1:8, 9] <- -exp(beta) * exp(lambda)
+hess[9, 1:8] <- -exp(beta) * exp(lambda)
+
+# sample from the laplace approximation
+set.seed(1995)
+laplace_results <- MASS::mvrnorm(n = 10000, mu = theta, Sigma = solve(-hess))
+hist(laplace_results, breaks = 50)
 ```
+
+Ok, the laplace approximation looks fairly similiar to the distribution we obtain from MH (see below).
 
 
 # Q6: Metropolis Hastings
@@ -300,12 +326,13 @@ get_log_posterior <- function(theta) {
 }
 
 # initialize results vector
-theta_results <- matrix(NA, m, 9)
+mcmc_results <- matrix(NA, m, 10)
 
 # starting values
 theta_current <- rep(0, 9)
 log_current <- get_log_posterior(theta_current)
-theta_results[1, ] <- theta_current
+mcmc_results[1, 1:9] <- theta_current
+mcmc_results[1, 10] <- log_current
 
 
 # tuning parameter for sd of proposal 
@@ -327,7 +354,8 @@ for (i in 2:m) {
     acc <- acc + 1
   }
 
-  theta_results[i, ] <- theta_current
+  mcmc_results[i, 1:9] <- theta_current
+  mcmc_results[i, 10] <- log_current
 }
 
 
@@ -337,16 +365,31 @@ acceptance <- acc/m
 acceptance
 
 # then remove burn-in period
-theta_results <- theta_results[(burnin+1):m, ]
+mcmc_results <- mcmc_results[(burnin+1):m, ]
 
 
 ```
+### Visualization
+```{r}
+# only for lambda1 -> samples for the posterior
+par(mar = c(5, 5, 1, 2))
+hist(mcmc_results[, 1], 
+     xlab=expression(theta), ylab="Density", 
+     main="",
+     col="lightblue", border="grey", 
+     breaks=70, 
+     ylim=c(0, 1),  
+     cex.axis=1.5, cex.lab=1.5, 
+     cex.main=2, las=1, freq=FALSE)  
+grid()  
+```
+
 
 ```{r}
 # line plot for theta samples
 #png("plots/MH_line.png", width = 10, height = 8, units = "in", res = 300)
 #par(mar = c(5, 5, 1, 2))
-plot(theta_results, type="l", 
+plot(mcmc_results[, 1:9], type="l", 
      xlab="Iteration", ylab=expression(theta), 
      ylim=c(-2,0.5),
      col="lightblue", lwd=2, 
@@ -359,7 +402,7 @@ grid()
 ## histogram
 #png("plots/MH_hist.png", width = 10, height = 8, units = "in", res = 300)
 par(mar = c(5, 5, 1, 2))
-hist(theta_results, 
+hist(mcmc_results[, 1:9], 
      xlab=expression(theta), ylab="Density", 
      main="",
      col="lightblue", border="grey", 
@@ -371,61 +414,209 @@ grid()
 #dev.off()
 ```
 
+Lets compare MH and laplace for lambda4:
+```{r}
+
+theta_post <- mcmc_results[, 1:9]
+
+lambda4_laplace <- exp(laplace_results[,4])
+lambda4_mcmc    <- exp(theta_post[,4])
+
+par(mfrow=c(1,2))
+hist(lambda4_mcmc, prob=TRUE, main="MCMC", col="grey")
+hist(lambda4_laplace, prob=TRUE, main="Laplace", col="lightblue")
+
+```
+
 ```{r}
 set.seed(1995)
 
 burnin <- 5000
 
 # assume res is (M x 9): lambdas + beta
-samples <- as.data.frame(theta_results[, 1:9])
-colnames(samples) <- c(paste0("lambda", 1:8), "beta")
+mcmc_samples <- as.data.frame(mcmc_results[, 1:9])
+colnames(mcmc_samples) <- c(paste0("lambda", 1:8), "beta")
 
-samples$iter <- seq_len(nrow(samples))
+mcmc_samples$iter <- seq_len(nrow(mcmc_samples))
 
 ```
 
 ```{r}
-lambda_long <- samples %>%
-  pivot_longer(cols = starts_with("lambda"),
+mcmc_samples_long <- mcmc_samples %>%
+  pivot_longer(cols = -iter,
                names_to = "parameter",
                values_to = "value")
 
-ggplot(lambda_long, aes(x = iter, y = value, colour = parameter)) +
+ggplot(mcmc_samples_long, aes(x = iter, y = value, colour = parameter)) +
   geom_line(alpha = 0.8) +
-  labs(x = "Iteration", y = expression(lambda[i])) +
+  labs(x = "Iteration", y = expression(theta[i])) +
   theme_minimal(base_size = 14)
 
 ```
 The values of the lambda vector are too close. Lets plot them separately in the next step.
 
 ```{r}
-ggplot(samples, aes(x = iter, y = beta)) +
+ggplot(mcmc_samples, aes(x = iter, y = beta)) +
   geom_line(colour = "lightblue", linewidth = 0.8) +
   labs(x = "Iteration", y = expression(beta)) +
   theme_minimal(base_size = 14)
 ```
 ```{r}
-samples_long <- samples %>%
-  pivot_longer(cols = -iter,
-               names_to = "parameter",
-               values_to = "value")
-
-ggplot(samples_long, aes(x = iter, y = value)) +
+ggplot(mcmc_samples_long, aes(x = iter, y = value)) +
   geom_line(colour = "lightblue", linewidth = 0.6) +
   facet_wrap(~ parameter, scales = "free_y", ncol = 3) +
   labs(x = "Iteration", y = "") +
   theme_minimal(base_size = 13)
 
 ```
-Q7: Point estimate and credible interval
+#### Compare MH and Laplace
 ```{r}
+laplace_samples <- as.data.frame(laplace_results)
+colnames(laplace_samples) <- c(paste0("lambda", 1:8), "beta")
+laplace_samples$iter <- seq_len(nrow(laplace_samples))
+
+laplace_samples_long <- laplace_samples %>%
+  pivot_longer(
+    cols = -iter,
+    names_to = "parameter",
+    values_to = "Value"
+  )
+
+ggplot() +
+  geom_histogram(
+    data = mcmc_samples_long,
+    aes(x = value, y = after_stat(density)),
+    bins = 50,
+    fill = "lightgrey",
+    colour = "darkgrey",
+    alpha = 0.5  # transparency mode
+  ) +  
+  geom_histogram(
+    data = laplace_samples_long,
+    aes(x = Value, y = after_stat(density)),
+    bins = 50,
+    fill = "lightgreen",
+    colour = "darkgrey",
+    alpha = 0.5  # transparency mode
+  ) 
+```
+
+```{r}
+ggplot() +
+  geom_histogram(
+    data = mcmc_samples_long,
+    aes(x = value, y = after_stat(density)),
+    bins = 50,
+    fill = "lightgreen",
+    colour = "lightgrey",
+    alpha = 0.5  # transparency mode
+  ) +  
+    geom_density(
+    data = laplace_samples_long,
+    aes(x = Value),
+    colour = "darkgrey"
+    #alpha = 0.5  # transparency mode
+    )
+```
+
+```{r}
+laplace_dens <- laplace_samples_long %>%
+  group_by(parameter) %>%
+  do(
+    {
+      dens <- density(.$Value)
+      # save the theta values and their density as dataframe
+      df <- data.frame(x = dens$x, y = dens$y, iter = seq_len(nrow(as.data.frame(x = dens$x))))
+      
+    }
+  )
+
+laplace_dens <- laplace_dens %>%
+  arrange(iter)
+  
+```
+
+```{r}
+ggplot() +
+  geom_histogram(
+    data = mcmc_samples_long,
+    aes(x = value, y = after_stat(density)),
+    bins = 50,
+    fill = "lightgrey",
+    colour = "darkgrey",
+    alpha = 0.5  # transparency mode
+  ) +
+  geom_line(
+    data = laplace_dens,
+    mapping = aes(x = x, y = y, group = parameter),
+    linewidth = 0.4,
+    colour = "lightgreen"
+  ) + 
+  facet_wrap(~ parameter, scales = "free")
+
+
 
 ```
 
-Q8: Predicted probability for p(lambda_4 > 0.11)
+
+# Q7: Point estimate and credible interval for lambda4
 ```{r}
+
+mcmc_pars_summ <- mcmc_samples_long %>%
+  group_by(parameter) %>%
+  summarise(mean = mean(value),
+            median = median(value),
+            sd = sd(value))
+mcmc_pars_summ
+```
+
+```{r}
+
+# first obtain posterior estimate of beta hyperparameter
+beta_samples <- mcmc_samples_long %>% filter(parameter == "beta") %>% pull(value) %>% exp()
+
+
+# posterior predictive mean of y4
+y4_ppc <- rnbinom(
+  n    = length(beta_samples),
+  size = alpha + y[4],
+  prob = (beta_samples + t[4]) / (beta_samples + 2*t[4])
+)
+
+mean(y4_ppc)
 
 ```
 
 
+We want to obtain the posterior predictive mean of our infection rate for virus $v_4$:
 
+$\mathbb{E}\left[Y_4|\lambda_4, D\right]$
+
+Our joint posterior distribution is a Gamma distribution, i.e. P(y_i | lambda, beta) ~ Gamma(shape = alpha + SUM y_i, beta + n). However, the posterior predictive distribution is negative binomial.
+
+Alternatively, we can obtain the estimate directly from our lambda samples:
+```{r}
+lambda4_samples <- mcmc_samples_long %>% filter(parameter == "lambda4") %>% pull(value) %>% exp()
+
+exp_lambda4_samples <- t[4] * lambda4_samples
+
+mean(exp_lambda4_samples)
+round(mean(exp_lambda4_samples), 0)
+```
+
+Now lets compute the quantile-based credible interval:
+```{r}
+# equal tail interval
+round(quantile(exp_lambda4_samples, probs = c(.025, .975)), 0)
+```
+
+
+# Q8: Predicted probability for p(lambda_4 > 0.11)
+```{r}
+lambda4_probs <- mcmc_samples_long %>% filter(parameter == "lambda4") %>% 
+  mutate(pred_dummy = ifelse(exp(value) > 0.11, 1, 0))
+
+lambda4_prob <- mcmc_samples_long %>% filter(parameter == "lambda4") %>%
+    summarise(prob = mean(exp(value) > 0.11)) %>% pull(prob)  # use boolean check
+
+```
