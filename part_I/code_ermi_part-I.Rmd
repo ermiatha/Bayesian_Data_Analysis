@@ -17,6 +17,9 @@ To clarify:
 - what is the default threshold for lasso/ridge and do we need to change it?
 
 To Do:
+
+- remove b0 from tracked parameters in lasso/ridge models?
+
 - finalize Q3 + 4 from (preliminary) models selected from Q2 
 - write this into report
 - start Code for Part II - Metropolis
@@ -74,6 +77,7 @@ df <- df %>%
   mutate(
     year_scaled = year-1984,
     id = as.numeric(as.factor(id)),  # because jags accepts only sequential integers
+    id_int = as.integer(factor(dat$id)),
     year_fct = as.factor(year),
     working_fct = as.factor(working),
     female_fct = as.factor(female)
@@ -232,7 +236,7 @@ model_run <- jags(
 
 ```
 ```{r eval=FALSE, include=FALSE}
-model_run$BUGSoutput$summary
+head(model_run$BUGSoutput$summary)
 
 mcmc_samples <- as.mcmc(model_run)
 bayesplot::mcmc_trace(mcmc_samples)
@@ -244,7 +248,7 @@ save(model_run, file = "./results/model_run.RData")
 ```
 
 read in the results:
-```{r}
+```{r eval=FALSE, include=FALSE}
 load("./results/model_run.RData")
 ```
 
@@ -345,7 +349,7 @@ bayesplot::mcmc_trace(mcmc_samples_keep)
 ```{r}
 summary(mcmc_samples_keep)
 # plot(mcmc_samples)
-gelman.diag(mcmc_samples_keep)
+gelman.diag(mcmc_samples_keep) 
 ```
 
 
@@ -471,11 +475,247 @@ If you add a prior, the coefficient will never become exactly Zero, but very clo
 
 ```
 
-#### implement Lasso priors
+#### model 2: Lasso
+--> implement Model 2 with Lasso priors
 ```{r}
+# Prepare the data
+
+df$age      <- scale(df$age)
+df$educ     <- scale(df$educ)
+df$hhninc   <- scale(df$hhninc)
+df$hsat     <- scale(df$hsat)
+df$handper  <- scale(df$handper)
+df$docvis   <- scale(df$docvis)
+df$hospvis  <- scale(df$hospvis)
+
+
+# form <- as.formula(paste("~", paste(covars, collapse = " + "), "- 1"))  # no intercept, 13 fixed effect predictors
+X <- model.matrix(~ t + female + age + hsat + handdum + handper + hhninc + hhkids + 
+    educ + married + public + docvis + hospvis - 1, data = dat)
+
+
+# Dimensions
+Nobs <- nrow(X)
+Nsubj <- df %>% select(id) %>% unique() %>% nrow()
+p <- ncol(X)
+colnames(X)  
+
+# Response
+y <- df$working
+id <- df$id_int
+
+# Data list for JAGS
+model_data_lasso <- list(
+  y = y,
+  X = X,
+  id = id,
+  Nobs = Nobs,
+  Nsubj = Nsubj,
+  p = p
+)
 
 ```
 
+Here we use the following parametrization: 
+
+
+$\eta_i = \beta_0 + \sum_kX_{ik}\beta_{k} + b_{0,i}$
+
+
+```{r lasso-model-bugs}
+jags_str_lasso <- "
+model
+{
+  # Likelihood Level 1
+  for (i in 1:Nobs) {
+    y[i] ~ dbern(p_i[i])
+    logit(p_i[i]) <- beta0 + inprod(X[i, ], beta[]) + b0[id[i]]
+
+    
+    # store the pointwise log-likelihood (for WAIC)
+    loglik[i] <- logdensity.bern(y[i], p_i[i])
+  }
+ 
+  # Likelihood Level 2 (random intercepts)
+  for(j in 1:Nsubj) {	
+			b0[j] ~ dnorm(0,tau_b0)
+  }
+  
+  # Lasso Priors (Normal-Exponential mixture)
+  for (k in 1:p) {
+    beta[k] ~ dnorm(0.0, tau_beta[k])
+    tau_beta[k] <- 1 / psi[k]
+    psi[k] ~dexp(lambda2 / 2)
+  }
+  
+  # Priors
+  beta0 ~ dnorm(0, 0.01)
+  lambda ~ dgamma(1, 1)
+  lambda2 <- (lambda*lambda)
+  
+  sigma_b0 ~ dunif(0, 10)
+  tau_b0 <- 1 / (sigma_b0 *  sigma_b0)  # pow(sigmab0,2)
+  
+}
+"
+```
+
+```{r}
+# add loglik to parameters to watch
+model_parameters_lasso <- c(
+  "beta0", "beta",  "b0", "sigma_b0", "lambda", "loglik"
+)
+
+## can also be deleted --> if no convergence issues, then we can skip providing initial values
+inits_lasso <- function() {
+
+  list(beta0 = rnorm(1, 0, 1),
+       beta = rnorm(p, 0, 0.2),
+       psi = rexp(p, rate = 1),
+       lambda = rgamma(1, 1, 1),
+       sigma_b0 = runif(1, 0.5, 2),
+       b0 = rnorm(Nsubj, 0, 0.3))
+}
+
+```
+
+
+```{r}
+# run the model
+model_run_lasso <- jags(
+  data = model_data_lasso,
+  parameters.to.save = model_parameters_lasso,
+  model.file = textConnection(jags_str_lasso),
+  inits = inits_lasso,
+  n.chains = 3,
+  n.iter = 40000,
+  n.burnin = 1000,
+  n.thin = 2,
+  jags.seed = 1010 # ADD SEED! for reproducibility
+)
+
+```
+
+```{r}
+mcmc_samples_all_lasso <- as.mcmc(model_run_lasso)
+
+mcmc_params <- !grepl("^loglik\\[", colnames(mcmc_samples_all_lasso[[1]]))  # [[1]] indicates the first of three chains
+
+mcmc_samples_lasso <- lapply(
+  mcmc_samples_all_lasso,
+  function(chain) chain[, mcmc_params]
+)
+
+class(mcmc_samples_lasso) <- "mcmc.list"
+```
+
+```{r}
+# gelman.diag(mcmc_samples_lasso) 
+
+mcmc.list_lasso <- as.mcmc.list(mcmc_samples_lasso)
+mcmc.df_lasso <- mcmc.as.data.frame(mcmc_samples_lasso)
+
+# summ <- model_run_lasso$BUGSoutput$summary
+# summ[!grepl("^loglik\\[", rownames(summ)), ]
+
+bayesplot::mcmc_trace(mcmc_samples_lasso)
+```
+
+
+##### Ridge
+```{r}
+jags_str_ridge <- "
+model
+{
+  # Likelihood Level 1
+  for (i in 1:Nobs) {
+    y[i] ~ dbern(p_i[i])
+    logit(p_i[i]) <- beta0 + inprod(X[i, ], beta[]) + b0[id[i]]
+
+    # store the pointwise log-likelihood (for WAIC)
+    loglik[i] <- logdensity.bern(y[i], p_i[i])
+  }
+ 
+  # Likelihood Level 2 (random intercepts)
+  for(j in 1:Nsubj) {	
+			b0[j] ~ dnorm(0,tau_b0)
+  }
+  
+  # Ridge Priors (Gaussian Shrinkage)
+  for (k in 1:p) {
+    beta[k] ~ dnorm(0.0, tau_beta)
+  }
+  
+  # Priors
+  beta0 ~ dnorm(0, 0.01)
+  tau ~ dunif(0, 10)
+  tau_beta <- 1 / (tau * tau)
+  
+  sigma_b0 ~ dunif(0, 10)
+  tau_b0 <- 1 / (sigma_b0 *  sigma_b0)  # pow(sigmab0,2)
+  
+}
+"
+```
+
+```{r}
+model_data_ridge <- model_data_lasso
+# add loglik to parameters to watch
+model_parameters_ridge <- c(
+  "beta0", "beta", "sigma_b0", "tau", "loglik"
+)
+
+## can also be deleted --> if no convergence issues, then we can skip providing initial values
+inits_ridge <-  function() {
+  list(beta0 = rnorm(1, 0, 1),
+       beta = rnorm(p, 0, 0.2),
+       tau = runif(1, 0.5, 2),
+       sigma_b0 = runif(1, 0.5, 2),
+       b = rnorm(Nsubj, 0, 0.3))
+}
+```
+
+
+```{r}
+# run the model
+model_run_ridge <- jags(
+  data = model_data_ridge,
+  parameters.to.save = model_parameters_ridge,
+  model.file = textConnection(jags_str_ridge),
+  inits = inits_ridge,
+  n.chains = 3,
+  n.iter = 40000,
+  n.burnin = 1000,
+  n.thin = 2,
+  jags.seed = 1010 # ADD SEED! for reproducibility
+)
+
+```
+
+```{r}
+mcmc_samples_all_ridge <- as.mcmc(model_run_ridge)
+
+mcmc_params <- !grepl("^loglik\\[", colnames(mcmc_samples_all_ridge[[1]]))  # [[1]] indicates the first of three chains
+
+mcmc_samples_ridge <- lapply(
+  mcmc_samples_all_ridge,
+  function(chain) chain[, mcmc_params]
+)
+
+class(mcmc_samples_ridge) <- "mcmc.list"
+```
+
+```{r}
+# gelman.diag(mcmc_samples_ridge) 
+
+mcmc.list_ridge <- as.mcmc.list(mcmc_samples_ridge)
+mcmc.df_ridge <- mcmc.as.data.frame(mcmc_samples_ridge)
+
+# summ <- model_run_ridge$BUGSoutput$summary
+# summ[!grepl("^loglik\\[", rownames(summ)), ]
+
+bayesplot::mcmc_trace(mcmc_samples_ridge)
+```
 
 
 # ***Question 3: Model comparison***
@@ -506,6 +746,7 @@ $$
 - $P_WAIC$ is a penalty term (= effective number of parameters). 
 - Less complex models are more constrained (less flexible/variable in the likelihood of each data point across MCMC samples) --> less penalty, complex models --> greater penalty.
 
+###### WAIC for Model 1
 ```{r}
 # equaliza variable naming *************
 #mcmc_samples <- as.mcmc(model_run)
@@ -520,6 +761,8 @@ waic_full$estimates["waic",]
 
 ```
 
+
+
 Let's do a small plausibility check, as the stacked matrix contains 58500 elements only.
 ```{r}
 start(mcmc_samples_all[[1]])
@@ -533,8 +776,43 @@ niter(mcmc_samples_all[[1]])
 ```
 Ok. Due to thinning and burn-in period, we end up with way less rows than the initially specified 40.000 iterations. 
 
+
+##### WAIC for Model 2
+```{r}
+###### WAIC for Model 2
+
+# equaliza variable naming *************
+#mcmc_samples <- as.mcmc(model_run)
+
+loglik_names <- sprintf("loglik[%d]", 1:model_data_lasso$Nobs)
+
+lls_lasso <- as.matrix(mcmc_samples_all_lasso)[, loglik_names]  # this stacks all three chains with row-binding for computing WAIC
+
+waic_full <- waic(lls_lasso)
+waic_full$estimates["waic",]
+
+```
+
+###### WAIC for Model 3
+```{r}
+###### WAIC for Model 3
+
+# equaliza variable naming *************
+#mcmc_samples <- as.mcmc(model_run)
+
+loglik_names <- sprintf("loglik[%d]", 1:model_data_ridge$Nobs)
+
+lls_ridge <- as.matrix(mcmc_samples_all_ridge)[, loglik_names]  # this stacks all three chains with row-binding for computing WAIC
+
+waic_full <- waic(lls_ridge)
+waic_full$estimates["waic",]
+
+```
+
 *DIC: Deviance Information criterion*
 #### compute DIC
+
+##### DIC for Model 1
 ```{r}
 model_run$BUGSoutput$DIC
 
@@ -585,6 +863,7 @@ waic.m0
 
 
 ```
+
 ```{r}
 str(model_run$BUGSoutput$sims.list)
 head(model_run$BUGSoutput[[1]])
@@ -596,10 +875,22 @@ D <- sims$deviance
 ```
 
 
+##### DIC for Model 2
+```{r}
+model_run_lasso$BUGSoutput$DIC
+
+```
+##### DIC for Model 3
+```{r}
+model_run_ridge$BUGSoutput$DIC
+
+```
+
 # ***Question 4: Model evaluation***
 #### generate predicted y_is from posterior draws
-```{r}
+###### For Model 1
 
+```{r}
 colnames(mcmc.df)
 # [1] "beta[1]"  "beta[2]"  "deviance" "sigmab0"  "chain" 
 
@@ -608,37 +899,11 @@ head(mcmc.df)
 # as.mcmc
 # mcmc.as.data.frame
 
-
-# construct linear predictors for each draw with design matrices and parameter draws
-betas <- grep("^beta", colnames(mcmc.df), value = T)
-X_beta <- as.matrix(df$year) %*% t(as.matrix(mcmc.df[, betas]))
-bs <- "sigmab0" 
-b_i[j] <- rnorm(0, sd = sigmab0[j])
-Z_b <- as.matrix(mcmc.df[, bs])
-# eta[i, j] <- X_beta + 
-eta[i, j] = beta0[j] + bs[j, i]
-
-# compute the probability/ies with inverse link function
-pred_prob[i, j] <- 1 / (1 + exp(-eta[i, j]))
-nobs <- nrow(pred_prob)
-nsamples <- ncol(pred_prob)
-
-# sample predicted y with rbinom() with length of my dataframe (n=700) and probabilities as obtained from above
-y_rep[i, j] <- rbinom(1, size = 1, prob = pred_prob[i, j])
-
-
-
-
-```
-
-
-```{r}
-
 # mcmc.df = posterior draws (iterations x parameters)
 # df = data frame with covariates (year) and n_obs = 700
 
 nobs <- nrow(df)
-nsamples <- nrow(mcmc.df)  # iterations * chains
+nsamples <- nrow(mcmc.df)  # iterations * chains      # OR AS: nrow(mcmc.df) 
 
 # 1. Extract beta coefficients
 betas <- grep("^beta", colnames(mcmc.df), value = TRUE)
@@ -677,12 +942,137 @@ y_pred_sd   <- apply(y_rep, 1, sd)      # uncertainty per observation
 
 # Or for dataset-level summaries:
 mean(y_rep)      # mean of all simulated outcomes
+max(y_rep)
+y_obs <- mean(df$working)
+
+
+# Summarize posterior predictive outcomes
+y_rep_means <- colMeans(y_rep)  # mean of each simulated dataset
+
+```
+compare this to the observed values
+```{r}
+mean(df$working)
+```
+
+```{r}
+fig_post_pred_distr <- ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
+  geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
+  geom_vline(xintercept = y_obs, col = "red", lwd = 0.8) +
+  labs(x = "Mean probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
+
+fig_post_pred_distr
+
+ggsave("./export/figures/q4_post_pred_distr.png", fig_post_pred_distr, heigh = 4, width = 4)
+```
+
+```{r}
+sd_rep <- apply(y_rep, 2, sd)
+sd_obs <- sd(df$working)
+
+fig_ppd_sd <- ggplot(data.frame(y_rep_means), aes(x = sd_rep)) +
+  geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
+  geom_vline(xintercept = sd_obs, col = "red", lwd = 0.8) +
+  labs(x = "SD of probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
+
+fig_ppd_sd
+
+ggsave("./export/figures/q4_ppd_sd.png", fig_ppd_sd, heigh = 4, width = 4)
+```
+
+
+
+
+```{r eval=FALSE, include=FALSE}
+
+################### OLD CODE CHUNK - DELETE ##################
+
+# construct linear predictors for each draw with design matrices and parameter draws
+betas <- grep("^beta", colnames(mcmc.df), value = T)
+X_beta <- as.matrix(df$year) %*% t(as.matrix(mcmc.df[, betas]))
+bs <- "sigmab0" 
+b_i[j] <- rnorm(0, sd = sigmab0[j])
+Z_b <- as.matrix(mcmc.df[, bs])
+# eta[i, j] <- X_beta + 
+eta[i, j] = beta0[j] + bs[j, i]
+
+# compute the probability/ies with inverse link function
+pred_prob[i, j] <- 1 / (1 + exp(-eta[i, j]))
+nobs <- nrow(pred_prob)
+nsamples <- ncol(pred_prob)
+
+# sample predicted y with rbinom() with length of my dataframe (n=700) and probabilities as obtained from above
+y_rep[i, j] <- rbinom(1, size = 1, prob = pred_prob[i, j])
+```
+
+
+##### For Model 2
+```{r}
+colnames(mcmc.df_lasso)
+# take the model results and turn to dataframe
+head(mcmc.df_lasso)
+# as.mcmc
+# mcmc.as.data.frame
+# mcmc.df = posterior draws (iterations x parameters)
+# df = data frame with covariates (year) and n_obs = 700
+
+nobs <- nrow(df)
+nsamples <- nrow(mcmc.df_lasso)  # iterations * chains
+
+# 1. Extract beta coefficients
+betas <- grep("^beta\\[", colnames(mcmc.df_lasso), value = TRUE)
+X <- model.matrix(~ t + female + age + hsat + handdum + handper + hhninc + hhkids + 
+    educ + married + public + docvis + hospvis -1, data = dat)
+ # X model.matrix(~ 1 + df$year)
+beta <- t(as.matrix(mcmc.df_lasso[, betas]))
+X_beta <- X %*% beta
+beta0 <- mcmc.df_lasso$beta0
+
+# check we have the correct dimensions
+dim(X)
+#[1] 700   13
+dim(beta)
+#[1]     13 58500
+dim(X_beta)  #  700 58500 = nobs x nsamples
+
+# 2. Sample random intercepts per draw
+sigmab0_draws <- mcmc.df_lasso$sigma_b0
+# For each posterior draw, sample a random intercept for each individual
+set.seed(123)
+Z_b <- matrix(rnorm(nobs * nsamples, mean = 0, sd = rep(sigmab0_draws, each = nobs)),
+              nrow = nobs, ncol = nsamples)
+X_beta <- sweep(X_beta, 2, beta0, "+")  #  does vectorized column-wise addition of beta0 to each sampl
+
+# 3. Linear predictor
+eta <- X_beta + Z_b
+
+# 4. Inverse link to get predicted probabilities
+pred_prob <- 1 / (1 + exp(-eta))
+
+# 5. Generate posterior predictive outcomes
+y_rep <- matrix(rbinom(nobs * nsamples, size = 1, prob = as.vector(pred_prob)),
+                nrow = nobs, ncol = nsamples)
+
+```
+
+```{r}
+# no extract column-wise summaries across draws
+y_pred_mean <- rowMeans(y_rep)          # mean predicted probability per observation
+y_pred_sd   <- apply(y_rep, 1, sd)      # uncertainty per observation
+
+# Or for dataset-level summaries:
+mean(y_rep)      # mean of all simulated outcomes
 sd(y_rep)        # standard deviation
 max(y_rep)
 ```
 compare this to the observed values
 ```{r}
 mean(df$working)
+median(df$working)
 ```
 
 
@@ -693,14 +1083,147 @@ y_obs <- mean(df$working)
 # Summarize posterior predictive outcomes
 y_rep_means <- colMeans(y_rep)  # mean of each simulated dataset
 
-fig_post_pred_distr <- ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
+fig_post_pred_distr_lasso <- ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
   geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
   geom_vline(xintercept = mean(y_obs), col = "red", lwd = 0.8) +
   labs(x = "Mean probability for employment", y = "Frequency"#,
        # title = "Posterior predictive distribution of predicted probability for working status"
        )
 
-
-ggsave("./export/figures/q4_post_pred_distr.png", fig_post_pred_distr, heigh = 4, width = 4)
+fig_post_pred_distr_lasso
+ggsave("./export/figures/q4_post_pred_distr_lasso.png", fig_post_pred_distr_lasso, heigh = 4, width = 4)
 ```
+
+```{r}
+sd_rep <- apply(y_rep, 2, sd)
+sd_obs <- sd(df$working)
+
+fig_ppd_sd_lasso <- ggplot(data.frame(y_rep_means), aes(x = sd_rep)) +
+  geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
+  geom_vline(xintercept = sd_obs, col = "red", lwd = 0.8) +
+  labs(x = "SD of probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
+
+fig_ppd_sd_lasso
+
+ggsave("./export/figures/q4_ppd_sd_lasso.png", fig_ppd_sd_lasso, heigh = 4, width = 4)
+```
+
+##### For Model 3
+```{r}
+colnames(mcmc.df_ridge)
+# take the model results and turn to dataframe
+head(mcmc.df_ridge)
+# as.mcmc
+# mcmc.as.data.frame
+# mcmc.df = posterior draws (iterations x parameters)
+# df = data frame with covariates (year) and n_obs = 700
+
+nobs <- nrow(df)
+nsamples <- nrow(mcmc.df_ridge)  # iterations * chains
+
+# 1. Extract beta coefficients
+betas <- grep("^beta\\[", colnames(mcmc.df_ridge), value = TRUE)
+X <- model.matrix(~ t + female + age + hsat + handdum + handper + hhninc + hhkids + 
+    educ + married + public + docvis + hospvis -1, data = dat)
+ # X model.matrix(~ 1 + df$year)
+beta <- t(as.matrix(mcmc.df_ridge[, betas]))
+X_beta <- X %*% beta
+beta0 <- mcmc.df_ridge$beta0
+
+# check we have the correct dimensions
+dim(X)
+#[1] 700   13
+dim(beta)
+#[1]     13 58500
+dim(X_beta)  #  700 58500 = nobs x nsamples
+
+# 2. Sample random intercepts per draw
+sigmab0_draws <- mcmc.df_lasso$sigma_b0
+# For each posterior draw, sample a random intercept for each individual
+set.seed(123)
+Z_b <- matrix(rnorm(nobs * nsamples, mean = 0, sd = rep(sigmab0_draws, each = nobs)),
+              nrow = nobs, ncol = nsamples)
+X_beta <- sweep(X_beta, 2, beta0, "+")  #  does vectorized column-wise addition of beta0 to each sampl
+
+# 3. Linear predictor
+eta <- X_beta + Z_b
+
+# 4. Inverse link to get predicted probabilities
+pred_prob <- 1 / (1 + exp(-eta))
+
+# 5. Generate posterior predictive outcomes
+y_rep <- matrix(rbinom(nobs * nsamples, size = 1, prob = as.vector(pred_prob)),
+                nrow = nobs, ncol = nsamples)
+
+```
+
+```{r}
+# no extract column-wise summaries across draws
+y_pred_mean <- rowMeans(y_rep)          # mean predicted probability per observation
+y_pred_sd   <- apply(y_rep, 1, sd)      # uncertainty per observation
+
+# Or for dataset-level summaries:
+mean(y_rep)      # mean of all simulated outcomes
+sd(y_rep)        # standard deviation
+max(y_rep)
+```
+compare this to the observed values
+```{r}
+mean(df$working)
+median(df$working)
+```
+
+
+
+```{r}
+y_obs <- mean(df$working)
+
+# Summarize posterior predictive outcomes
+y_rep_means <- colMeans(y_rep)  # mean of each simulated dataset
+
+fig_post_pred_distr_ridge <- ggplot(data.frame(y_rep_means), aes(x = y_rep_means)) +
+  geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
+  geom_vline(xintercept = mean(y_obs), col = "red", lwd = 0.8) +
+  labs(x = "Mean probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
+
+fig_post_pred_distr_ridge
+
+ggsave("./export/figures/q4_post_pred_distr_ridge.png", fig_post_pred_distr_ridge, heigh = 4, width = 4)
+```
+
+This is unexpected. The PPD histogram has not at all its maximum at where the mean probability for working status lies.
+(try this with the model object from Antonina)
+
+Anyway, if we assume that no computational or algebraical mistake was made, this result shows that our lasso model strongly shifted our distribution which shows strong skewness 
+
+```{r}
+sd_rep <- apply(y_rep, 2, sd)
+sd_obs <- sd(df$working)
+
+fig_ppd_sd_ridge <- ggplot(data.frame(y_rep_means), aes(x = sd_rep)) +
+  geom_histogram(binwidth = 0.01, fill = "lightgrey", color = "grey") +
+  geom_vline(xintercept = sd_obs, col = "red", lwd = 0.8) +
+  labs(x = "SD of probability for employment", y = "Frequency"#,
+       # title = "Posterior predictive distribution of predicted probability for working status"
+       )
+
+fig_ppd_sd_ridge
+
+ggsave("./export/figures/q4_ppd_sd_ridge.png", fig_ppd_sd_ridge, heigh = 4, width = 4)
+```
+
+```{r}
+mean(plogis(mcmc.df_lasso$beta0))
+mean(plogis(mcmc.df$`beta[1]`))
+
+summary(mcmc.df_lasso$sigma_b0)
+summary(mcmc.df$sigmab0)
+
+
+```
+
 
