@@ -30,13 +30,9 @@ newton_raphson <- function(n,
                            maxit, 
                            lambda_start, 
                            beta_start) {
-
-  #####
-  # this function is based on the gradient from Antoninas solution
-  #####
   
   # starting values for parameters
-  # NOTE: REPARAMETRIZED PARS ARE USED and denote lambda_tilde, beta_tilde
+  # NOTE: Reparametrized paramateres lambda_tilde, beta_tilde are denoted as lambda, beta
   lambda <- lambda_start
   beta <- beta_start
   # overall parameter vector theta (9x1 vector)
@@ -84,7 +80,7 @@ newton_raphson <- function(n,
       
     # N-R step
     theta <- c(lambda, beta)
-    theta_new <- theta - solve(hess, grad) # res[i, 1:9] <- th[i-1,1:9]-1*solve(hess)%*%grad
+    theta_new <- theta - solve(hess, grad)
     
     ## update parameters
     lambda <- theta_new[1:8]
@@ -93,13 +89,6 @@ newton_raphson <- function(n,
     # store new estimated pars
     res[i, ] <- c(lambda, beta, log_p)
 
-    
-    ## ensure that lambdas are > 0 ?
-    # lambda[1] <- max(0.00001, lambda[1])
-    # ...
-    
-    ## ensure that beta > 0 ?
-    
   }
   
   res
@@ -110,100 +99,6 @@ newton_raphson <- function(n,
 
 ```
 
-```{r eval=FALSE, include=FALSE}
-newton_raphson_old <- function(n, 
-                           y, 
-                           t, 
-                           alpha, 
-                           gamma, 
-                           delta, 
-                           maxit, 
-                           lambda_start, 
-                           beta_start) {
-
-  #####
-  # this function is based on the gradient from my old solution
-  #####
-  
-  # starting values for parameters
-  # NOTE: REPARAMETRIZED PARS ARE USED and denote lambda_tilde, beta_tilde
-  lambda <- lambda_start
-  beta <- beta_start
-  # overall parameter vector theta (9x1 vector)
-  theta <- c(lambda, beta)
-  
-  # initialize result matrix with 3 columns and nrow=maxit
-  res <- matrix(0, maxit, 10)
-  res[1, 1:8] <- lambda
-  res[1, 9] <- beta
-  
-  for (i in 2:maxit) {
-    
-  
-    # use estimates from previous step
-    lambda <- res[i-1, 1:8]
-    beta <- res[i-1, 9]
-    
-    # log posterior
-    # first version: has algebraic mistakes
-    # log_p <- sum(y*lambda*t - t*exp(lambda)) + beta*(n*alpha + gamma-1) + sum((alpha - 1)*lambda) -      exp(beta)*sum(exp(lambda)) - delta*exp(beta)
-    # second version: 
-    log_p <- sum(y*lambda - t*exp(lambda)) + sum((alpha - 1)*lambda) - exp(beta)*sum(exp(lambda)) + beta*(n*alpha + gamma) - delta*exp(beta)
-    # third version: Antoninas solution
-    # log_p <- sum((y + alpha)*lambda) - sum((t + exp(beta))*exp(lambda)) + (n*alpha + gamma)*beta - delta*exp(beta)
-    res[1,10] <- log_p
-    
-    # gradient of log-posterior (vector of first derivatives)
-    # lambda gradient vector of n=8
-    # first version: grad_lambda <- (y*t +  alpha-1) - exp(lambda)*(t + exp(beta))
-    grad_lambda <- (y +  alpha-1) - exp(lambda)*(t + exp(beta))
-    # Antoninas solution: 
-    # grad_lambda <- (y +  alpha) - exp(lambda)*(t + exp(beta))
-    # beta gradient of n=1
-    grad_beta <- n*alpha + gamma - 1 - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
-    # Antoninas solution: 
-    # grad_beta <- n*alpha + gamma - exp(beta)*sum(exp(lambda)) - delta*exp(beta)
-  
-    # build gradient vector
-    grad <- c(grad_lambda, grad_beta)
-    
-    
-    # 2nd order derivative of lambdas n=8
-    g2_lambda <- -exp(lambda)*(t+exp(beta))
-    g2_beta <- -exp(beta)*sum(exp(lambda))-delta*exp(beta)
-    
-    # cross derivatives
-    cross_der <- -exp(lambda)*exp(beta)
-    
-    # build hessian of 9x9 dimensions
-    hess <- matrix(0, 9, 9)
-    diag(hess) <- c(g2_lambda, g2_beta)
-    hess[1:8, 9] <- -exp(beta) * exp(lambda)
-    hess[9, 1:8] <- -exp(beta) * exp(lambda)
-    
-      
-    # N-R step
-    theta <- c(lambda, beta)
-    theta_new <- theta - solve(hess, grad) # res[i, 1:9] <- th[i-1,1:9]-1*solve(hess)%*%grad
-    
-    ## update parameters
-    lambda <- theta_new[1:8]
-    beta <- theta_new[9]
-    
-    # store new estimated pars
-    res[i, ] <- c(lambda, beta, log_p)
-
-    
-    ## ensure that exponentiated lambdas are > 0 ?
-    # lambda[1] <- max(0.00001, lambda[1])
-    # ...
-  }
-  
-  res
-  
-}
-
-```
 
 
 ```{r}
@@ -247,20 +142,6 @@ But needs to be backtransformed
 ```{r}
 round(colMeans(exp(res[, 1:9])), 5)
 ```
-
-Lets quickly compare with the results obtained based on the old solution (different gradient, same Hessian)
-```{r eval=FALSE, include=FALSE}
-
-res_old <- newton_raphson_old(n, y, t, alpha, gamma, delta, maxit, 
-                      lambda_start, beta_start)
-
-round(colMeans(exp(res_old[, 1:9])), 5)
-
-```
-Ok, we get fairly similar results. Lets stick with the newer version though.
-
-
-
 
 # Q5: Laplace-Approximation
 ```{r}
@@ -324,9 +205,6 @@ get_log_posterior <- function(theta) {
   lambda <- theta[1:8]   # log-lambdas
   beta <- theta[9]       # log-beta
 
-  # old solution for log-posterior
-  #sum((y + alpha - 1) * lambda) -
-  #  sum(t * exp(lambda)) - exp(beta) * sum(exp(lambda)) + (length(y) * alpha + gamma - 1) * beta - delta * exp(beta)
   log_p <- sum((y + alpha)*lambda) - sum((t + exp(beta))*exp(lambda)) + (n*alpha + gamma)*beta - delta*exp(beta)
   log_p
 }
@@ -342,14 +220,14 @@ mcmc_results[1, 10] <- log_current
 
 
 # tuning parameter for sd of proposal 
-c <- 0.76  # you may tune later
+c <- 0.76  # tuned to achieve 23%
 sigma_tilde <- sigma_star * c
 
 # MCMC loop
 for (i in 2:m) {
 
   # random-walk proposal
-  theta_cand <- theta_current + MASS::mvrnorm(1, mu = rep(0, 9), sigma_tilde) # rnorm(9, 0, proposal_sd)
+  theta_cand <- theta_current + MASS::mvrnorm(1, mu = rep(0, 9), sigma_tilde)
 
   log_cand <- get_log_posterior(theta_cand)
   logalpha <- log_cand - log_current
@@ -394,8 +272,6 @@ grid()
 
 ```{r}
 # line plot for theta samples
-#png("plots/MH_line.png", width = 10, height = 8, units = "in", res = 300)
-#par(mar = c(5, 5, 1, 2))
 plot(mcmc_results[, 1:9], type="l", 
      xlab="Iteration", ylab=expression(theta), 
      ylim=c(-2,0.5),
@@ -403,11 +279,8 @@ plot(mcmc_results[, 1:9], type="l",
      cex.axis=1.5, cex.lab=1.5, 
      cex.main=2, las=1)  
 grid()  
-#dev.off()
-
 
 ## histogram
-#png("plots/MH_hist.png", width = 10, height = 8, units = "in", res = 300)
 par(mar = c(5, 5, 1, 2))
 hist(mcmc_results[, 1:9], 
      xlab=expression(theta), ylab="Density", 
@@ -418,7 +291,7 @@ hist(mcmc_results[, 1:9],
      cex.axis=1.5, cex.lab=1.5, 
      cex.main=2, las=1, freq=FALSE)  
 grid()  
-#dev.off()
+
 ```
 
 Lets compare MH and laplace for lambda4:
@@ -443,7 +316,6 @@ burnin <- 5000
 # assume res is (M x 9): lambdas + beta
 mcmc_samples <- as.data.frame(mcmc_results[, 1:9])
 colnames(mcmc_samples) <- c(paste0("lambda", 1:8), "beta")
-#colnames(mcmc_samples) <- c(paste0($\lambda_$, 1:8), "beta")
 
 mcmc_samples$iter <- seq_len(nrow(mcmc_samples))
 
