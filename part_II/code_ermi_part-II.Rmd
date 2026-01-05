@@ -15,6 +15,7 @@ library(tidyr)
 library(dplyr)
 library(MASS)
 library(coda)
+library(latex2exp)
 ```
 
 # Q4: Newton-Raphson-Algorithm
@@ -109,7 +110,7 @@ newton_raphson <- function(n,
 
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 newton_raphson_old <- function(n, 
                            y, 
                            t, 
@@ -223,7 +224,7 @@ beta_start <- 0
 
 res <- newton_raphson(n, y, t, alpha, gamma, delta, maxit, 
                       lambda_start, beta_start)
-
+colnames(res) <- c(paste0("lambda", 1:8), "beta", "loglik")
 ```
 
 
@@ -248,7 +249,7 @@ round(colMeans(exp(res[, 1:9])), 5)
 ```
 
 Lets quickly compare with the results obtained based on the old solution (different gradient, same Hessian)
-```{r}
+```{r eval=FALSE, include=FALSE}
 
 res_old <- newton_raphson_old(n, y, t, alpha, gamma, delta, maxit, 
                       lambda_start, beta_start)
@@ -288,12 +289,17 @@ hess[9, 1:8] <- -exp(beta) * exp(lambda)
 set.seed(1995)
 laplace_results <- MASS::mvrnorm(n = 10000, mu = theta, Sigma = solve(-hess))
 hist(laplace_results, breaks = 50)
+
+sigma_star <- solve(-hess)
+sigma_laplace <- round(sigma_star, 5)
+colnames(sigma_laplace) <- c(paste0("lambda", 1:8), "beta")
+
 ```
 
 Ok, the laplace approximation looks fairly similiar to the distribution we obtain from MH (see below).
 
 
-# Q6: Metropolis Hastings
+# Q6: Metropolis
 ```{r}
 set.seed(1995)
 #### random walk metropolis sampler ####
@@ -336,13 +342,14 @@ mcmc_results[1, 10] <- log_current
 
 
 # tuning parameter for sd of proposal 
-proposal_sd <- 0.283   # you may tune later
+c <- 0.76  # you may tune later
+sigma_tilde <- sigma_star * c
 
 # MCMC loop
 for (i in 2:m) {
 
   # random-walk proposal
-  theta_cand <- theta_current + rnorm(9, 0, proposal_sd)
+  theta_cand <- theta_current + MASS::mvrnorm(1, mu = rep(0, 9), sigma_tilde) # rnorm(9, 0, proposal_sd)
 
   log_cand <- get_log_posterior(theta_cand)
   logalpha <- log_cand - log_current
@@ -407,7 +414,7 @@ hist(mcmc_results[, 1:9],
      main="",
      col="lightblue", border="grey", 
      breaks=70, 
-     ylim=c(0, 1),  
+     ylim=c(0, 0.6),  
      cex.axis=1.5, cex.lab=1.5, 
      cex.main=2, las=1, freq=FALSE)  
 grid()  
@@ -436,6 +443,7 @@ burnin <- 5000
 # assume res is (M x 9): lambdas + beta
 mcmc_samples <- as.data.frame(mcmc_results[, 1:9])
 colnames(mcmc_samples) <- c(paste0("lambda", 1:8), "beta")
+#colnames(mcmc_samples) <- c(paste0($\lambda_$, 1:8), "beta")
 
 mcmc_samples$iter <- seq_len(nrow(mcmc_samples))
 
@@ -446,6 +454,12 @@ mcmc_samples_long <- mcmc_samples %>%
   pivot_longer(cols = -iter,
                names_to = "parameter",
                values_to = "value")
+
+
+theta_labels <- c(
+  paste0("lambda", 1:8) = paste0("$\\lambda_", 1:8, "$"),
+  beta = "$\\beta$"
+)
 
 ggplot(mcmc_samples_long, aes(x = iter, y = value, colour = parameter)) +
   geom_line(alpha = 0.8) +
@@ -462,11 +476,33 @@ ggplot(mcmc_samples, aes(x = iter, y = beta)) +
   theme_minimal(base_size = 14)
 ```
 ```{r}
-ggplot(mcmc_samples_long, aes(x = iter, y = value)) +
+theta_labels <- c(latex2exp::TeX("$\\beta$"), latex2exp::TeX(paste0("$\\lambda_", 1:8, "$")))  # correct order!
+names(theta_labels) <- colnames(mcmc_samples)
+
+theta_labels_latex <- c( "$\\beta$",
+  paste0("$\\lambda_", 1:8, "$")
+ 
+)
+
+
+theta_labeller <- function(x) {
+  latex2exp::TeX(paste(theta_labels_latex, ""))
+}
+
+
+q6_convergence_pypar <- ggplot(mcmc_samples_long, aes(x = iter, y = value)) +
   geom_line(colour = "lightblue", linewidth = 0.6) +
-  facet_wrap(~ parameter, scales = "free_y", ncol = 3) +
+  facet_wrap(~ parameter, 
+             scales = "free_y", 
+             ncol = 3,
+             labeller = as_labeller(theta_labeller, default = label_parsed)
+  ) +
   labs(x = "Iteration", y = "") +
   theme_minimal(base_size = 13)
+
+q6_convergence_pypar
+
+ggsave("./export/figures/q6_convergence_pypar.png", q6_convergence_pypar, heigh = 4, width = 6)
 
 ```
 #### Compare MH and Laplace
@@ -502,7 +538,7 @@ ggplot() +
 ```
 
 ```{r}
-ggplot() +
+q6_samples_metr_laplace <- ggplot() +
   geom_histogram(
     data = mcmc_samples_long,
     aes(x = value, y = after_stat(density)),
@@ -517,6 +553,11 @@ ggplot() +
     colour = "darkgrey"
     #alpha = 0.5  # transparency mode
     )
+
+q6_samples_metr_laplace
+
+ggsave("./export/figures/q6_samples_metr_laplace.png", q6_samples_metr_laplace, heigh = 4, width = 6)
+
 ```
 
 ```{r}
@@ -537,14 +578,14 @@ laplace_dens <- laplace_dens %>%
 ```
 
 ```{r}
-ggplot() +
+q6_samples_metr_laplace_bypar <- ggplot() +
   geom_histogram(
     data = mcmc_samples_long,
     aes(x = value, y = after_stat(density)),
     bins = 50,
     fill = "lightgrey",
     colour = "darkgrey",
-    alpha = 0.5  # transparency mode
+    alpha = 0.3  # transparency mode
   ) +
   geom_line(
     data = laplace_dens,
@@ -552,8 +593,13 @@ ggplot() +
     linewidth = 0.4,
     colour = "lightgreen"
   ) + 
-  facet_wrap(~ parameter, scales = "free")
+  facet_wrap(~ parameter, scales = "free",
+             labeller = as_labeller(theta_labeller, default = label_parsed)
+             )
 
+q6_samples_metr_laplace_bypar
+
+ggsave("./export/figures/q6_samples_metr_laplace_bypar.png", q6_samples_metr_laplace_bypar, heigh = 4, width = 6)
 
 
 ```
@@ -571,6 +617,22 @@ mcmc_pars_summ
 ```
 
 ```{r}
+lambda4 <- exp(mcmc_samples[, "lambda4"])
+Ey4 <- t[4] * lambda4
+
+# Point estimate (posterior mean) and 95% CrI (quantile-based)
+Ey4_mean <- mean(Ey4)
+Ey4_ci <- quantile(Ey4, probs = c(0.025, 0.975))
+
+Ey4_mean
+Ey4_ci
+round(Ey4_mean, 0)
+round(Ey4_ci, 0)
+```
+
+
+```{r}
+# if we draw from a posterior predictive distribution: 
 
 # first obtain posterior estimate of beta hyperparameter
 beta_samples <- mcmc_samples_long %>% filter(parameter == "beta") %>% pull(value) %>% exp()
@@ -584,6 +646,8 @@ y4_ppc <- rnbinom(
 )
 
 mean(y4_ppc)
+
+round(mean(y4_ppc))
 
 ```
 
@@ -618,5 +682,6 @@ lambda4_probs <- mcmc_samples_long %>% filter(parameter == "lambda4") %>%
 
 lambda4_prob <- mcmc_samples_long %>% filter(parameter == "lambda4") %>%
     summarise(prob = mean(exp(value) > 0.11)) %>% pull(prob)  # use boolean check
-
+lambda4_prob
 ```
+
